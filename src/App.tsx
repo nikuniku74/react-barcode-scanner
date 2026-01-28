@@ -1,11 +1,11 @@
 import { useCallback, useState } from 'react';
-import { useCamera, useBarcodeDetection } from './hooks';
+import { useCamera, useBarcodeDetection, usePhotoCapture } from './hooks';
 import { CameraView, BarcodeResults } from './components';
 import './App.css';
 
 /**
  * Main App Component
- * Orchestrates camera stream and barcode detection
+ * Capture photo → Analyze for barcodes → Display results
  * Production-ready barcode scanner SPA
  */
 function App() {
@@ -14,15 +14,39 @@ function App() {
   // Initialize camera hook
   const { videoRef, isLoading, hasPermission, error: cameraError, stream } = useCamera(isEnabled);
 
-  // Initialize barcode detection hook
+  // Initialize barcode detection hook (on-demand, not continuous)
   const {
     results,
     isScanning,
     clearResults,
-  } = useBarcodeDetection(videoRef, isEnabled && !!stream);
+    detectFromImage,
+  } = useBarcodeDetection();
 
-  // Handle app disable/enable
-  const handleToggleScanning = useCallback(() => {
+  // Initialize photo capture hook
+  const { captureAsDataUrl } = usePhotoCapture();
+
+  // Handle photo capture and analysis
+  const handleCapturePhoto = useCallback(async () => {
+    if (!videoRef.current) return;
+
+    try {
+      // Capture photo as data URL
+      const photoDataUrl = captureAsDataUrl(videoRef);
+      if (!photoDataUrl) {
+        alert('Failed to capture photo');
+        return;
+      }
+
+      // Analyze photo for barcodes
+      await detectFromImage(photoDataUrl);
+    } catch (error) {
+      console.error('Error capturing photo:', error);
+      alert('Failed to analyze photo');
+    }
+  }, [videoRef, captureAsDataUrl, detectFromImage]);
+
+  // Handle camera disable/enable
+  const handleToggleCamera = useCallback(() => {
     setIsEnabled(prev => !prev);
   }, []);
 
@@ -35,7 +59,8 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1 className="app-title">📸 Barcode Scanner v1.0</h1>
+        <h1 className="app-title">📸 Barcode Scanner</h1>
+        <p className="app-subtitle">Scatta una foto e analizza i barcode</p>
       </header>
 
       <main className="app-main">
@@ -74,14 +99,23 @@ function App() {
               : isLoading
                 ? 'Initializing camera...'
                 : isScanning
-                  ? `Scanning... (${results.length} detected)`
-                  : 'Ready'}
+                  ? `Analyzing... (${results.length} found)`
+                  : results.length > 0
+                    ? `${results.length} barcode(s) detected`
+                    : 'Ready to scan'}
           </span>
         </div>
 
-        <button className="btn-toggle" onClick={handleToggleScanning}>
-          {isEnabled ? '⏸️ Pause' : '▶️ Resume'}
-        </button>
+        <div className="footer-buttons">
+          {stream && !isScanning && (
+            <button className="btn-capture" onClick={handleCapturePhoto}>
+              📷 Scatta Foto
+            </button>
+          )}
+          <button className="btn-toggle" onClick={handleToggleCamera}>
+            {isEnabled ? '❌ Spegni' : '✅ Accendi'}
+          </button>
+        </div>
       </footer>
     </div>
   );

@@ -1,190 +1,207 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import Quagga from 'quagga';
 import type { DetectionState } from '../types/barcode.types';
 import { deduplicationManager } from '../utils/deduplication';
 
 /**
- * Hook to manage barcode detection from video stream
- * Uses Quagga library - modern, actively maintained successor to ZXing
- * Detects MULTIPLE barcodes in real-time with excellent performance
+ * Hook to analyze a photo for barcodes
+ * Detects MULTIPLE barcodes from a captured image
  */
-export const useBarcodeDetection = (
-  videoRef: React.RefObject<HTMLVideoElement | null>,
-  enabled: boolean = true
-) => {
+export const useBarcodeDetection = () => {
   const [detectionState, setDetectionState] = useState<DetectionState>({
     results: [],
     isScanning: false,
     error: null,
   });
 
-  const isInitializedRef = useRef(false);
-  const lastDetectionTimeRef = useRef(0);
-  const detectionThrottleRef = useRef(100); // ms between detections
-  const mountedRef = useRef(true);
-
-  // Initialize Quagga
-  useEffect(() => {
-    if (!enabled || !videoRef.current) {
-      return;
-    }
-
-    let mounted = true;
-    mountedRef.current = true;
-
-    const initializeQuagga = async () => {
-      if (isInitializedRef.current) {
-        return;
-      }
-
+  /**
+   * Detect barcodes from an image (DataUrl)
+   */
+  const detectFromImage = useCallback(
+    async (imageDataUrl: string) => {
       try {
         setDetectionState(prev => ({ ...prev, isScanning: true, error: null }));
 
-        // Configure Quagga
-        await new Promise<void>((resolve, reject) => {
-          Quagga.init(
-            {
-              inputStream: {
-                name: 'Live',
-                type: 'LiveStream',
-                target: videoRef.current!,
-                constraints: {
-                  width: { ideal: 1280 },
-                  height: { ideal: 720 },
-                  facingMode: 'environment',
-                },
-              },
-              decoder: {
-                readers: [
-                  'code_128_reader',
-                  'ean_reader',
-                  'ean_8_reader',
-                  'code_39_reader',
-                  'code_39_vin_reader',
-                  'codabar_reader',
-                  'upc_reader',
-                  'upc_e_reader',
-                  'i2of5_reader',
-                ],
-                debug: {
-                  showCanvas: false,
-                  showPatterns: false,
-                  showFrequency: false,
-                  showErrors: false,
-                },
-              },
-              locator: {
-                halfSample: true,
-                patchSize: 'medium',
-              },
-              numOfWorkers: navigator.hardwareConcurrency || 4,
-              frequency: 10, // Detection frequency (every Nth frame)
-            },
-            (err: any) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
+        // Clear previous results for new detection
+        deduplicationManager.clear();
+
+        // Create a promise-based wrapper for Quagga image processing
+        const results = await new Promise<any[]>((resolve, reject) => {
+          try {
+            // Load image
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+
+            img.onload = () => {
+              try {
+                // Create canvas from image
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+
+                if (!ctx) {
+                  reject(new Error('Could not get canvas context'));
+                  return;
+                }
+
+                ctx.drawImage(img, 0, 0);
+
+                // Initialize Quagga with image stream
+                let isInitialized = false;
+
+                Quagga.init(
+                  {
+                    inputStream: {
+                      name: 'Image',
+                      type: 'ImageStream',
+                      target: document.createElement('div') as any,
+                    },
+                    decoder: {
+                      readers: [
+                        'code_128_reader',
+                        'ean_reader',
+                        'ean_8_reader',
+                        'code_39_reader',
+                        'code_39_vin_reader',
+                        'codabar_reader',
+                        'upc_reader',
+                        'upc_e_reader',
+                        'i2of5_reader',
+                      ],
+                      debug: {
+                        showCanvas: false,
+                      },
+                    },
+                    locator: {
+                      halfSample: true,
+                      patchSize: 'medium',
+                    },
+                  },
+                  (err: any) => {
+                    if (err) {
+                      reject(err);
+                      return;
+                    }
+                    isInitialized = true;
+
+                    // Process the image
+                    const detectedBarcodes: any[] = [];
+
+                    const handleDetection = (result: any) => {
+                      if (result && result.codeResult && result.codeResult.code) {
+                        // Check if already detected to avoid duplicates in same frame
+                        const exists = detectedBarcodes.some(
+                          d =>
+                            d.codeResult.code === result.codeResult.code &&
+                            d.codeResult.format === result.codeResult.format
+                        );
+                        if (!exists) {
+                          detectedBarcodes.push(result);
+                        }
+                      }
+                    };
+
+                    Quagga.onDetected(handleDetection);
+
+                    // Analyze the canvas image frame by frame
+                    const analyzeFrame = () => {
+                      try {
+                        // Get image data from canvas
+                        const imageData = ctx.getImageData(
+                          0,
+                          0,
+                          canvas.width,
+                          canvas.height
+                        );
+
+                        // Process frame through Quagga
+                        (Quagga as any).processFrame({
+                          data: imageData.data,
+                          width: canvas.width,
+                          height: canvas.height,
+                        });
+
+                        // Give it time to process and then resolve
+                        setTimeout(() => {
+                          try {
+                            Quagga.stop();
+                          } catch (e) {
+                            // Ignore
+                          }
+                          resolve(detectedBarcodes);
+                        }, 300);
+                      } catch (error) {
+                        reject(error);
+                      }
+                    };
+
+                    // Start analysis
+                    if (isInitialized) {
+                      analyzeFrame();
+                    }
+                  }
+                );
+              } catch (error) {
+                reject(error);
               }
-            }
-          );
+            };
+
+            img.onerror = () => {
+              reject(new Error('Failed to load image'));
+            };
+
+            img.src = imageDataUrl;
+          } catch (error) {
+            reject(error);
+          }
         });
 
-        if (!mounted) return;
-
-        // Set up detection handler
-        Quagga.onDetected((result: any) => {
-          if (!mounted || !mountedRef.current) return;
-
-          // Throttle to avoid excessive state updates
-          const now = Date.now();
-          if (now - lastDetectionTimeRef.current < detectionThrottleRef.current) {
-            return;
-          }
-          lastDetectionTimeRef.current = now;
-
-          try {
-            if (result && result.codeResult && result.codeResult.code) {
+        // Process detected results
+        if (results && results.length > 0) {
+          for (const result of results) {
+            if (result.codeResult && result.codeResult.code) {
               const value = result.codeResult.code;
               const format = result.codeResult.format || 'unknown';
-
-              // Add/update detection in deduplication manager
-              const newResult = deduplicationManager.addOrUpdate(value, format, Date.now());
-
-              if (newResult && mounted) {
-                setDetectionState(prev => ({ ...prev, isScanning: true, error: null }));
-                const results = deduplicationManager.getResults();
-                setDetectionState(prev => ({ ...prev, results }));
-              }
+              deduplicationManager.addOrUpdate(value, format, Date.now());
             }
-          } catch (error) {
-            // Silently continue scanning
           }
-        });
 
-        // Start scanning
-        Quagga.start();
-        isInitializedRef.current = true;
-
-        if (mounted) {
-          setDetectionState(prev => ({ ...prev, isScanning: true }));
+          const finalResults = deduplicationManager.getResults();
+          setDetectionState(prev => ({
+            ...prev,
+            results: finalResults,
+            isScanning: false,
+          }));
+        } else {
+          setDetectionState(prev => ({
+            ...prev,
+            results: [],
+            isScanning: false,
+            error: 'No barcodes found in this image. Try again.',
+          }));
         }
       } catch (error) {
-        if (!mounted) return;
-
-        const errorMessage =
-          error instanceof Error ? error.message : 'Failed to initialize barcode scanner';
-
+        const errorMessage = error instanceof Error ? error.message : 'Detection failed';
         setDetectionState(prev => ({
           ...prev,
           error: errorMessage,
+          results: [],
           isScanning: false,
         }));
       }
-    };
-
-    initializeQuagga();
-
-    return () => {
-      mounted = false;
-      // Note: We keep Quagga initialized for reuse, cleanup happens in the disable effect
-    };
-  }, [enabled, videoRef]);
-
-  // Stop scanning when disabled
-  useEffect(() => {
-    if (!enabled && isInitializedRef.current) {
-      try {
-        Quagga.stop();
-        isInitializedRef.current = false;
-      } catch (error) {
-        // Silently fail
-      }
-      setDetectionState(prev => ({ ...prev, isScanning: false }));
-    }
-  }, [enabled]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      if (isInitializedRef.current) {
-        try {
-          Quagga.stop();
-        } catch (error) {
-          // Silently fail
-        }
-      }
-    };
-  }, []);
+    },
+    []
+  );
 
   const clearResults = useCallback(() => {
     deduplicationManager.clear();
-    setDetectionState(prev => ({ ...prev, results: [] }));
+    setDetectionState(prev => ({ ...prev, results: [], error: null }));
   }, []);
 
   return {
     ...detectionState,
+    detectFromImage,
     clearResults,
   };
 };
