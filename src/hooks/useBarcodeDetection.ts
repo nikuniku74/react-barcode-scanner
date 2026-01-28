@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import jsQR from 'jsqr';
+import { BarcodeDetector } from 'barcode-detector';
 import type { DetectionState } from '../types/barcode.types';
 import { deduplicationManager } from '../utils/deduplication';
 
@@ -110,11 +111,50 @@ export const useBarcodeDetection = () => {
                     });
                   }
 
-                  // TODO: Add 1D barcode detection here if needed
-                  // For now, jsQR handles QR codes which are most common
+                  // Detect 1D barcodes (Code 128, EAN-13, EAN-8, Code 39, UPC, etc.)
+                  try {
+                    const detector = new BarcodeDetector();
+                    const imageDataUrl = canvas.toDataURL('image/png');
+                    const img1D = new Image();
 
-                  console.log('[Barcode Detection] Analysis complete, found:', results.length);
-                  resolveOnce(results);
+                    img1D.onload = async () => {
+                      try {
+                        const detectedBarcodes = await detector.detect(img1D as any);
+
+                        if (detectedBarcodes && detectedBarcodes.length > 0) {
+                          console.log('[Barcode Detection] 1D Barcodes detected:', detectedBarcodes.length);
+                          for (const barcode of detectedBarcodes) {
+                            results.push({
+                              code: barcode.rawValue,
+                              format: barcode.format || '1D_BARCODE',
+                              location: barcode.boundingBox,
+                            });
+                          }
+                        }
+                      } catch (error) {
+                        console.warn('[Barcode Detection] 1D barcode detection error:', error);
+                        // Continue with QR results even if 1D detection fails
+                      }
+
+                      console.log('[Barcode Detection] Analysis complete, found:', results.length);
+                      resolveOnce(results);
+                    };
+
+                    img1D.onerror = () => {
+                      console.warn('[Barcode Detection] Failed to load image for 1D detection');
+                      // Continue with QR results if 1D detection image fails
+                      console.log('[Barcode Detection] Analysis complete, found:', results.length);
+                      resolveOnce(results);
+                    };
+
+                    img1D.crossOrigin = 'anonymous';
+                    img1D.src = imageDataUrl;
+                  } catch (error) {
+                    console.warn('[Barcode Detection] 1D barcode detection not available:', error);
+                    // Continue with QR results even if 1D detection is not available
+                    console.log('[Barcode Detection] Analysis complete, found:', results.length);
+                    resolveOnce(results);
+                  }
                 } catch (error) {
                   console.error('[Barcode Detection] Analysis error:', error);
                   rejectOnce(error instanceof Error ? error : new Error(String(error)));
