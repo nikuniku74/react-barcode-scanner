@@ -41,30 +41,37 @@ function App() {
     if (!videoRef.current) return;
 
     try {
-      // Transition to processing state - camera will be paused
+      console.log('[App] State: idle → processing (capturing photo)');
       setScanState('processing');
       setErrorMessage(null);
 
       // Capture photo as data URL
+      console.log('[App] Capturing photo from video...');
       const photoDataUrl = captureAsDataUrl(videoRef);
       if (!photoDataUrl) {
+        console.error('[App] Photo capture failed');
         setScanState('error');
         setErrorMessage('Failed to capture photo');
         return;
       }
 
+      console.log('[App] Photo captured, starting analysis...');
       // Analyze photo for barcodes - detectFromImage returns the results array
       const detectedResults = await detectFromImage(photoDataUrl);
 
+      console.log('[App] Analysis complete, results:', detectedResults.length);
       // Transition to final state based on detection results
       if (detectedResults && detectedResults.length > 0) {
+        console.log('[App] State: processing → completed');
         setScanState('completed');
       } else {
+        console.log('[App] State: processing → no-result');
         setScanState('no-result');
       }
     } catch (error) {
-      console.error('Error capturing photo:', error);
+      console.error('[App] Error capturing photo:', error);
       const message = error instanceof Error ? error.message : 'Detection failed';
+      console.log('[App] State: processing → error');
       setScanState('error');
       setErrorMessage(message);
     }
@@ -84,7 +91,11 @@ function App() {
    * Toggle camera on/off
    */
   const handleToggleCamera = useCallback(() => {
-    setCameraEnabled(prev => !prev);
+    setCameraEnabled(prev => {
+      const newState = !prev;
+      console.log('[App] Camera toggle:', newState ? 'ON' : 'OFF');
+      return newState;
+    });
   }, []);
 
   /**
