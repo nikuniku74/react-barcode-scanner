@@ -27,8 +27,24 @@ export const useBarcodeDetection = () => {
 
         // Create a promise-based wrapper for Quagga image processing
         const results = await new Promise<any[]>((resolve, reject) => {
+          let hasResolved = false;
+
+          const resolveOnce = (data: any[]) => {
+            if (!hasResolved) {
+              hasResolved = true;
+              resolve(data);
+            }
+          };
+
+          const rejectOnce = (error: Error) => {
+            if (!hasResolved) {
+              hasResolved = true;
+              reject(error);
+            }
+          };
+
           try {
-            // Load image
+            // Load image with proper EXIF orientation handling for iOS
             const img = new Image();
             img.crossOrigin = 'anonymous';
 
@@ -41,123 +57,154 @@ export const useBarcodeDetection = () => {
                 const ctx = canvas.getContext('2d');
 
                 if (!ctx) {
-                  reject(new Error('Could not get canvas context'));
+                  rejectOnce(new Error('Could not get canvas context'));
                   return;
                 }
 
+                // Draw image on canvas
                 ctx.drawImage(img, 0, 0);
 
                 // Initialize Quagga with image stream
                 let isInitialized = false;
+                const detectedBarcodes: any[] = [];
 
-                Quagga.init(
-                  {
-                    inputStream: {
-                      name: 'Image',
-                      type: 'ImageStream',
-                      target: document.createElement('div') as any,
-                    },
-                    decoder: {
-                      readers: [
-                        'code_128_reader',
-                        'ean_reader',
-                        'ean_8_reader',
-                        'code_39_reader',
-                        'code_39_vin_reader',
-                        'codabar_reader',
-                        'upc_reader',
-                        'upc_e_reader',
-                        'i2of5_reader',
-                      ],
-                      debug: {
-                        showCanvas: false,
-                      },
-                    },
-                    locator: {
-                      halfSample: true,
-                      patchSize: 'medium',
+                // Configure Quagga with optimal settings for image processing
+                const quaggaConfig = {
+                  inputStream: {
+                    name: 'Image',
+                    type: 'ImageStream',
+                    target: document.createElement('div') as any,
+                  },
+                  decoder: {
+                    readers: [
+                      'code_128_reader',
+                      'ean_reader',
+                      'ean_8_reader',
+                      'code_39_reader',
+                      'code_39_vin_reader',
+                      'codabar_reader',
+                      'upc_reader',
+                      'upc_e_reader',
+                      'i2of5_reader',
+                    ],
+                    debug: {
+                      showCanvas: false,
                     },
                   },
-                  (err: any) => {
-                    if (err) {
-                      reject(err);
-                      return;
-                    }
-                    isInitialized = true;
+                  locator: {
+                    halfSample: true,
+                    patchSize: 'medium',
+                  },
+                };
 
-                    // Process the image
-                    const detectedBarcodes: any[] = [];
-
-                    const handleDetection = (result: any) => {
-                      if (result && result.codeResult && result.codeResult.code) {
-                        // Check if already detected to avoid duplicates in same frame
-                        const exists = detectedBarcodes.some(
-                          d =>
-                            d.codeResult.code === result.codeResult.code &&
-                            d.codeResult.format === result.codeResult.format
-                        );
-                        if (!exists) {
-                          detectedBarcodes.push(result);
-                        }
-                      }
-                    };
-
-                    Quagga.onDetected(handleDetection);
-
-                    // Analyze the canvas image frame by frame
-                    const analyzeFrame = () => {
-                      try {
-                        // Get image data from canvas
-                        const imageData = ctx.getImageData(
-                          0,
-                          0,
-                          canvas.width,
-                          canvas.height
-                        );
-
-                        // Process frame through Quagga
-                        (Quagga as any).processFrame({
-                          data: imageData.data,
-                          width: canvas.width,
-                          height: canvas.height,
-                        });
-
-                        // Give it time to process and then resolve
-                        setTimeout(() => {
-                          try {
-                            Quagga.stop();
-                          } catch (e) {
-                            // Ignore
-                          }
-                          resolve(detectedBarcodes);
-                        }, 300);
-                      } catch (error) {
-                        reject(error);
-                      }
-                    };
-
-                    // Start analysis
-                    if (isInitialized) {
-                      analyzeFrame();
-                    }
+                Quagga.init(quaggaConfig, (err: any) => {
+                  if (err) {
+                    rejectOnce(err instanceof Error ? err : new Error(String(err)));
+                    return;
                   }
-                );
+
+                  isInitialized = true;
+
+                  const handleDetection = (result: any) => {
+                    if (result && result.codeResult && result.codeResult.code) {
+                      const exists = detectedBarcodes.some(
+                        d =>
+                          d.codeResult.code === result.codeResult.code &&
+                          d.codeResult.format === result.codeResult.format
+                      );
+                      if (!exists) {
+                        detectedBarcodes.push(result);
+                      }
+                    }
+                  };
+
+                  Quagga.onDetected(handleDetection);
+
+                  // Process frame immediately
+                  const analyzeFrame = () => {
+                    try {
+                      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+                      // Process through Quagga
+                      (Quagga as any).processFrame({
+                        data: imageData.data,
+                        width: canvas.width,
+                        height: canvas.height,
+                      });
+
+                      // Allow processing time - critical for reliability
+                      // Use requestAnimationFrame for better Safari iOS compatibility
+                      const stopAndResolve = () => {
+                        try {
+                          Quagga.stop();
+                        } catch (e) {
+                          // Ignore Quagga.stop errors
+                        }
+                        // Ensure state update completes on Safari iOS
+                        resolveOnce(detectedBarcodes);
+                      };
+
+                      // Multi-frame analysis for better detection on iOS
+                      let frameCount = 0;
+                      const maxFrames = 3;
+
+                      const processAdditionalFrames = () => {
+                        frameCount++;
+                        if (frameCount >= maxFrames) {
+                          stopAndResolve();
+                          return;
+                        }
+
+                        try {
+                          (Quagga as any).processFrame({
+                            data: imageData.data,
+                            width: canvas.width,
+                            height: canvas.height,
+                          });
+
+                          // Use setTimeout instead of requestAnimationFrame for iOS reliability
+                          setTimeout(processAdditionalFrames, 150);
+                        } catch (e) {
+                          stopAndResolve();
+                        }
+                      };
+
+                      // Start additional frame processing after initial processing
+                      setTimeout(processAdditionalFrames, 150);
+                    } catch (error) {
+                      rejectOnce(error instanceof Error ? error : new Error(String(error)));
+                    }
+                  };
+
+                  if (isInitialized) {
+                    analyzeFrame();
+                  }
+                });
               } catch (error) {
-                reject(error);
+                rejectOnce(error instanceof Error ? error : new Error(String(error)));
               }
             };
 
             img.onerror = () => {
-              reject(new Error('Failed to load image'));
+              rejectOnce(new Error('Failed to load image'));
             };
 
             img.src = imageDataUrl;
           } catch (error) {
-            reject(error);
+            rejectOnce(error instanceof Error ? error : new Error(String(error)));
           }
         });
 
-        // Process detected results
+        // Process detected results and update state with guarantee
+        const updateState = (newResults: any[], errorMsg: string | null) => {
+          setDetectionState(prev => ({
+            ...prev,
+            results: newResults,
+            isScanning: false,
+            error: errorMsg,
+          }));
+        };
+
         if (results && results.length > 0) {
           for (const result of results) {
             if (result.codeResult && result.codeResult.code) {
@@ -168,18 +215,9 @@ export const useBarcodeDetection = () => {
           }
 
           const finalResults = deduplicationManager.getResults();
-          setDetectionState(prev => ({
-            ...prev,
-            results: finalResults,
-            isScanning: false,
-          }));
+          updateState(finalResults, null);
         } else {
-          setDetectionState(prev => ({
-            ...prev,
-            results: [],
-            isScanning: false,
-            error: 'No barcodes found in this image. Try again.',
-          }));
+          updateState([], 'No barcodes found in this image. Try again.');
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Detection failed';

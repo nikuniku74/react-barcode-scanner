@@ -37,11 +37,14 @@ function App() {
         return;
       }
 
-      // Analyze photo for barcodes
+      // Analyze photo for barcodes with proper image handling for iOS
       await detectFromImage(photoDataUrl);
     } catch (error) {
       console.error('Error capturing photo:', error);
-      alert('Failed to analyze photo');
+      // Ensure error state is properly set
+      if (error instanceof Error) {
+        console.error('Error details:', error.message);
+      }
     }
   }, [videoRef, captureAsDataUrl, detectFromImage]);
 
