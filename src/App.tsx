@@ -1,18 +1,26 @@
 import { useCallback, useState } from 'react';
 import { useCamera, useBarcodeDetection, usePhotoCapture } from './hooks';
 import { CameraView, BarcodeResults } from './components';
+import type { ScanState } from './types/barcode.types';
 import './App.css';
 
 /**
  * Main App Component
- * Capture photo → Analyze for barcodes → Display results
- * Production-ready barcode scanner SPA
+ * Implements explicit state machine for barcode scanning:
+ * idle → processing → (completed | no-result | error) → idle
+ *
+ * Production-ready barcode scanner SPA with proper state management
  */
 function App() {
-  const [isEnabled, setIsEnabled] = useState(true);
+  // Explicit state machine for barcode scanning workflow
+  const [scanState, setScanState] = useState<ScanState>('idle');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [cameraEnabled, setCameraEnabled] = useState(true);
 
-  // Initialize camera hook
-  const { videoRef, isLoading, hasPermission, error: cameraError, stream } = useCamera(isEnabled);
+  // Initialize camera hook - camera is paused when scanState !== 'idle'
+  const { videoRef, isLoading, hasPermission, error: cameraError, stream } = useCamera(
+    cameraEnabled && scanState === 'idle'
+  );
 
   // Initialize barcode detection hook (on-demand, not continuous)
   const {
@@ -25,39 +33,101 @@ function App() {
   // Initialize photo capture hook
   const { captureAsDataUrl } = usePhotoCapture();
 
-  // Handle photo capture and analysis
+  /**
+   * Capture photo and transition through processing → completed/no-result state
+   * Camera is paused during this entire phase
+   */
   const handleCapturePhoto = useCallback(async () => {
     if (!videoRef.current) return;
 
     try {
+      // Transition to processing state - camera will be paused
+      setScanState('processing');
+      setErrorMessage(null);
+
       // Capture photo as data URL
       const photoDataUrl = captureAsDataUrl(videoRef);
       if (!photoDataUrl) {
-        alert('Failed to capture photo');
+        setScanState('error');
+        setErrorMessage('Failed to capture photo');
         return;
       }
 
-      // Analyze photo for barcodes with proper image handling for iOS
-      await detectFromImage(photoDataUrl);
+      // Analyze photo for barcodes - detectFromImage returns the results array
+      const detectedResults = await detectFromImage(photoDataUrl);
+
+      // Transition to final state based on detection results
+      if (detectedResults && detectedResults.length > 0) {
+        setScanState('completed');
+      } else {
+        setScanState('no-result');
+      }
     } catch (error) {
       console.error('Error capturing photo:', error);
-      // Ensure error state is properly set
-      if (error instanceof Error) {
-        console.error('Error details:', error.message);
-      }
+      const message = error instanceof Error ? error.message : 'Detection failed';
+      setScanState('error');
+      setErrorMessage(message);
     }
   }, [videoRef, captureAsDataUrl, detectFromImage]);
 
-  // Handle camera disable/enable
+  /**
+   * Reset state and return to idle for another capture
+   * This will reactivate the camera
+   */
+  const handleCaptureAnother = useCallback(() => {
+    setScanState('idle');
+    setErrorMessage(null);
+    clearResults();
+  }, [clearResults]);
+
+  /**
+   * Toggle camera on/off
+   */
   const handleToggleCamera = useCallback(() => {
-    setIsEnabled(prev => !prev);
+    setCameraEnabled(prev => !prev);
   }, []);
 
+  /**
+   * Retry camera access after permission denial
+   */
   const handlePermissionRetry = useCallback(() => {
-    setIsEnabled(false);
-    // Small delay before re-enabling to reset camera state
-    setTimeout(() => setIsEnabled(true), 500);
+    setCameraEnabled(false);
+    setTimeout(() => setCameraEnabled(true), 500);
   }, []);
+
+  /**
+   * Determine status text based on current scan state
+   */
+  const getStatusText = (): string => {
+    if (hasPermission === false) {
+      return 'Camera access denied';
+    }
+    if (isLoading) {
+      return 'Initializing camera...';
+    }
+
+    switch (scanState) {
+      case 'idle':
+        return results.length > 0 ? `${results.length} barcode(s) detected` : 'Ready to scan';
+      case 'processing':
+        return `Analyzing... (${results.length} found)`;
+      case 'completed':
+        return `Found ${results.length} barcode(s)`;
+      case 'no-result':
+        return 'No barcodes found';
+      case 'error':
+        return errorMessage || 'Error during detection';
+      default:
+        return 'Ready to scan';
+    }
+  };
+
+  /**
+   * Determine if status indicator should be active
+   */
+  const isStatusActive = (): boolean => {
+    return scanState === 'processing' || (scanState === 'idle' && isScanning);
+  };
 
   return (
     <div className="app">
@@ -67,17 +137,36 @@ function App() {
       </header>
 
       <main className="app-main">
-        {/* Camera Section */}
-        <CameraView
-          videoRef={videoRef}
-          cameraState={{
-            stream,
-            error: cameraError,
-            isLoading,
-            hasPermission,
-          }}
-          isScanning={isScanning}
-        />
+        {/* Camera Section - Hidden when not in idle state */}
+        {scanState === 'idle' && (
+          <CameraView
+            videoRef={videoRef}
+            cameraState={{
+              stream,
+              error: cameraError,
+              isLoading,
+              hasPermission,
+            }}
+            isScanning={isScanning}
+          />
+        )}
+
+        {/* Camera disabled message during processing */}
+        {scanState !== 'idle' && (
+          <div className="camera-disabled-container">
+            <div className="camera-disabled-message">
+              <p className="disabled-status">
+                {scanState === 'processing' && '⏳ Analizzando la foto...'}
+                {scanState === 'completed' && '✅ Analisi completata'}
+                {scanState === 'no-result' && '❌ Nessun barcode trovato'}
+                {scanState === 'error' && '⚠️ Errore durante l\'analisi'}
+              </p>
+              {errorMessage && scanState === 'error' && (
+                <p className="error-details">{errorMessage}</p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Error handling for permission denied */}
         {hasPermission === false && (
@@ -95,28 +184,28 @@ function App() {
       {/* Control Footer */}
       <footer className="app-footer">
         <div className="footer-status">
-          <span className={`status-indicator ${isScanning ? 'active' : 'inactive'}`} />
-          <span className="status-text">
-            {hasPermission === false
-              ? 'Camera access denied'
-              : isLoading
-                ? 'Initializing camera...'
-                : isScanning
-                  ? `Analyzing... (${results.length} found)`
-                  : results.length > 0
-                    ? `${results.length} barcode(s) detected`
-                    : 'Ready to scan'}
-          </span>
+          <span className={`status-indicator ${isStatusActive() ? 'active' : 'inactive'}`} />
+          <span className="status-text">{getStatusText()}</span>
         </div>
 
         <div className="footer-buttons">
-          {stream && !isScanning && (
+          {/* Show "Scatta Foto" only in idle state */}
+          {scanState === 'idle' && stream && !isScanning && (
             <button className="btn-capture" onClick={handleCapturePhoto}>
               📷 Scatta Foto
             </button>
           )}
+
+          {/* Show "Scatta un'altra foto" in completed, no-result, or error states */}
+          {(scanState === 'completed' || scanState === 'no-result' || scanState === 'error') && (
+            <button className="btn-capture" onClick={handleCaptureAnother}>
+              📷 Scatta un'altra foto
+            </button>
+          )}
+
+          {/* Camera toggle button always available */}
           <button className="btn-toggle" onClick={handleToggleCamera}>
-            {isEnabled ? '❌ Spegni' : '✅ Accendi'}
+            {cameraEnabled ? '❌ Spegni' : '✅ Accendi'}
           </button>
         </div>
       </footer>

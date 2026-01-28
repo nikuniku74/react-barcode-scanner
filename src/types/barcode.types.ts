@@ -3,6 +3,11 @@
  */
 
 /**
+ * Explicit state machine for barcode scanning workflow
+ */
+export type ScanState = 'idle' | 'processing' | 'completed' | 'no-result' | 'error';
+
+/**
  * Represents a single detected barcode
  */
 export interface DetectedBarcode {

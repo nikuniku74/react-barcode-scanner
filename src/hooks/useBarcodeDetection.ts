@@ -18,7 +18,7 @@ export const useBarcodeDetection = () => {
    * Detect barcodes from an image (DataUrl)
    */
   const detectFromImage = useCallback(
-    async (imageDataUrl: string) => {
+    async (imageDataUrl: string): Promise<any[]> => {
       try {
         setDetectionState(prev => ({ ...prev, isScanning: true, error: null }));
 
@@ -196,14 +196,8 @@ export const useBarcodeDetection = () => {
         });
 
         // Process detected results and update state with guarantee
-        const updateState = (newResults: any[], errorMsg: string | null) => {
-          setDetectionState(prev => ({
-            ...prev,
-            results: newResults,
-            isScanning: false,
-            error: errorMsg,
-          }));
-        };
+        let finalResults: any[] = [];
+        let errorMsg: string | null = null;
 
         if (results && results.length > 0) {
           for (const result of results) {
@@ -213,12 +207,19 @@ export const useBarcodeDetection = () => {
               deduplicationManager.addOrUpdate(value, format, Date.now());
             }
           }
-
-          const finalResults = deduplicationManager.getResults();
-          updateState(finalResults, null);
+          finalResults = deduplicationManager.getResults();
         } else {
-          updateState([], 'No barcodes found in this image. Try again.');
+          errorMsg = 'No barcodes found in this image. Try again.';
         }
+
+        setDetectionState(prev => ({
+          ...prev,
+          results: finalResults,
+          isScanning: false,
+          error: errorMsg,
+        }));
+
+        return finalResults;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Detection failed';
         setDetectionState(prev => ({
@@ -227,6 +228,7 @@ export const useBarcodeDetection = () => {
           results: [],
           isScanning: false,
         }));
+        return [];
       }
     },
     []

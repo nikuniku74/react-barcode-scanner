@@ -97,9 +97,15 @@ export const useCamera = (enabled: boolean = true) => {
     // Cleanup
     return () => {
       mounted = false;
+      // Stop all video and audio tracks
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
         streamRef.current = null;
+      }
+      // Clear video element source
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+        videoRef.current.pause();
       }
     };
   }, [enabled]);
