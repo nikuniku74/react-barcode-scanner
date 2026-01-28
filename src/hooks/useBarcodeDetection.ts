@@ -35,6 +35,8 @@ export const useBarcodeDetection = () => {
         console.log('[Barcode Detection] Starting barcode analysis (jsQR)');
 
         // Wrap detection in timeout - guarantees completion even on failures
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
         const detectedBarcodes = await Promise.race([
           // Primary: jsQR analysis (pure JavaScript, ZERO HTTP)
           new Promise<any[]>((resolve, reject) => {
@@ -43,6 +45,8 @@ export const useBarcodeDetection = () => {
             const resolveOnce = (data: any[]) => {
               if (!hasResolved) {
                 hasResolved = true;
+                // Clear timeout when promise resolves
+                if (timeoutId) clearTimeout(timeoutId);
                 resolve(data);
               }
             };
@@ -50,6 +54,8 @@ export const useBarcodeDetection = () => {
             const rejectOnce = (error: Error) => {
               if (!hasResolved) {
                 hasResolved = true;
+                // Clear timeout when promise rejects
+                if (timeoutId) clearTimeout(timeoutId);
                 reject(error);
               }
             };
@@ -129,12 +135,12 @@ export const useBarcodeDetection = () => {
           }),
 
           // Fallback: Timeout guarantee (5 seconds for jsQR is plenty)
-          new Promise<any[]>((_, reject) =>
-            setTimeout(() => {
+          new Promise<any[]>((_, reject) => {
+            timeoutId = setTimeout(() => {
               console.error('[Barcode Detection] Timeout after', DETECTION_TIMEOUT, 'ms');
               reject(new Error(`Detection timeout (${DETECTION_TIMEOUT}ms)`));
-            }, DETECTION_TIMEOUT)
-          ),
+            }, DETECTION_TIMEOUT);
+          }),
         ]);
 
         // Process detected results
