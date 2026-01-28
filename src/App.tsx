@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { useCamera, useBarcodeDetection, usePhotoCapture } from './hooks';
+import { useCamera, useBarcodeAPI, usePhotoCapture } from './hooks';
 import { CameraView, BarcodeResults } from './components';
 import type { ScanState } from './types/barcode.types';
 import './App.css';
@@ -22,16 +22,16 @@ function App() {
     cameraEnabled && scanState === 'idle'
   );
 
-  // Initialize barcode detection hook (on-demand, not continuous)
+  // Initialize barcode API hook (sends image to backend)
   const {
     results,
     isScanning,
     clearResults,
-    detectFromImage,
-  } = useBarcodeDetection();
+    scanImage,
+  } = useBarcodeAPI();
 
   // Initialize photo capture hook
-  const { captureAsDataUrl } = usePhotoCapture();
+  const { captureAsBlob } = usePhotoCapture();
 
   /**
    * Capture photo and transition through processing → completed/no-result state
@@ -45,19 +45,19 @@ function App() {
       setScanState('processing');
       setErrorMessage(null);
 
-      // Capture photo as data URL
+      // Capture photo as blob
       console.log('[App] Capturing photo from video...');
-      const photoDataUrl = captureAsDataUrl(videoRef);
-      if (!photoDataUrl) {
+      const photoBlob = await captureAsBlob(videoRef);
+      if (!photoBlob) {
         console.error('[App] Photo capture failed');
         setScanState('error');
         setErrorMessage('Failed to capture photo');
         return;
       }
 
-      console.log('[App] Photo captured, starting analysis...');
-      // Analyze photo for barcodes - detectFromImage returns the results array
-      const detectedResults = await detectFromImage(photoDataUrl);
+      console.log('[App] Photo captured, uploading to backend...');
+      // Send photo to backend API for barcode detection
+      const detectedResults = await scanImage(photoBlob);
 
       console.log('[App] Analysis complete, results:', detectedResults.length);
       // Transition to final state based on detection results
@@ -75,7 +75,7 @@ function App() {
       setScanState('error');
       setErrorMessage(message);
     }
-  }, [videoRef, captureAsDataUrl, detectFromImage]);
+  }, [videoRef, captureAsBlob, scanImage]);
 
   /**
    * Reset state and return to idle for another capture

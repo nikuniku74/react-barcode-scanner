@@ -1,3 +1,3 @@
 export { useCamera } from './useCamera';
-export { useBarcodeDetection } from './useBarcodeDetection';
+export { useBarcodeAPI } from './useBarcodeAPI';
 export { usePhotoCapture } from './usePhotoCapture';

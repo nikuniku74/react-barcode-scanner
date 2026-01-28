@@ -10,9 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "barcode-detector": "^3.0.8",
-    "jsqr": "^1.4.0",
-    "quagga": "^0.12.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
